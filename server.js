@@ -463,7 +463,7 @@ app.post('/api/stripe/create-checkout-session', authenticateToken, async (req, r
             }],
             // Importante: Passamos o ID do nosso usuário para identificar no webhook
             client_reference_id: userId,
-            success_url: `${process.env.FRONTEND_URL}/payment-success`, // Crie essa página no front-end
+            success_url: `${process.env.FRONTEND_URL}/`, // Crie essa página no front-end
             cancel_url: `${process.env.FRONTEND_URL}/plans`, // Página de planos
         });
 
