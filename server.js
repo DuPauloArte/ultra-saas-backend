@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import stripe from 'stripe';
 
 // --- 2. CONFIGURAÇÃO INICIAL E CONEXÃO COM O BANCO DE DADOS ---
 dotenv.config();
@@ -14,6 +15,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = 'seu-segredo-super-secreto-e-longo'; 
+const stripeInstance = stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors());
 app.use(express.json());
@@ -443,6 +445,93 @@ app.get('/api/analytics', authenticateToken, async (req, res) => {
         console.error('Erro ao buscar analytics:', error);
         res.status(500).json({ message: 'Erro ao buscar analytics' });
     }
+});
+
+
+// ROTA PARA CRIAR A SESSÃO DE CHECKOUT
+app.post('/api/stripe/create-checkout-session', authenticateToken, async (req, res) => {
+    const { priceId } = req.body;
+    const userId = req.user.userId; // Pegamos o ID do usuário do nosso token JWT
+
+    try {
+        const session = await stripeInstance.checkout.sessions.create({
+            mode: 'subscription',
+            payment_method_types: ['card'],
+            line_items: [{
+                price: priceId,
+                quantity: 1,
+            }],
+            // Importante: Passamos o ID do nosso usuário para identificar no webhook
+            client_reference_id: userId,
+            success_url: `${process.env.FRONTEND_URL}/payment-success`, // Crie essa página no front-end
+            cancel_url: `${process.env.FRONTEND_URL}/plans`, // Página de planos
+        });
+
+        res.json({ url: session.url });
+    } catch (error) {
+        console.error('Erro ao criar sessão de checkout:', error);
+        res.status(500).json({ error: 'Não foi possível iniciar o checkout.' });
+    }
+});
+
+// ROTA DE WEBHOOK PARA RECEBER EVENTOS DO STRIPE
+// Nota: O Stripe precisa do corpo bruto da requisição para verificar a assinatura
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET; // Crie esta variável no Render
+
+    let event;
+
+    try {
+        event = stripeInstance.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err) {
+        console.log(`❌ Erro no webhook: ${err.message}`);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Lide com os eventos
+    switch (event.type) {
+        case 'checkout.session.completed':
+            const session = event.data.object;
+            const userId = session.client_reference_id;
+            const stripeCustomerId = session.customer;
+            const stripeSubscriptionId = session.subscription;
+            
+            // Lógica para encontrar o plano com base no priceId
+            // Você precisará mapear seus Price IDs para os nomes dos planos
+            const planName = 'Power'; // Exemplo: Implemente a lógica para mapear priceId -> planName
+            
+            // Atualize seu usuário no banco de dados
+            await User.findByIdAndUpdate(userId, {
+                stripeCustomerId,
+                stripeSubscriptionId,
+                plan: planName,
+                subscriptionStatus: 'active',
+            });
+            break;
+
+        case 'customer.subscription.deleted':
+        case 'customer.subscription.updated':
+            // Lida com cancelamentos ou problemas de pagamento
+            const subscription = event.data.object;
+            const userToUpdate = await User.findOne({ stripeCustomerId: subscription.customer });
+
+            if (userToUpdate) {
+                // Se a assinatura não está mais ativa, redefina para o plano Free
+                if (subscription.status !== 'active') {
+                    await User.findByIdAndUpdate(userToUpdate._id, {
+                        plan: 'Free',
+                        subscriptionStatus: 'canceled',
+                    });
+                }
+            }
+            break;
+
+        default:
+            console.log(`Evento não tratado: ${event.type}`);
+    }
+
+    res.json({ received: true });
 });
 
 
