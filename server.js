@@ -90,27 +90,38 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         case 'customer.subscription.deleted':
         case 'customer.subscription.updated':
             const subscription = event.data.object;
+            console.log(`Webhook recebido: ${event.type} para a assinatura ${subscription.id}`);
 
-            // Se o status da assinatura não for mais 'active' ou 'trialing'
+            // Verificamos se o status da assinatura indica que ela não está mais ativa
             if (subscription.status !== 'active' && subscription.status !== 'trialing') {
                 try {
-                    // Encontramos o usuário no nosso DB pelo stripeCustomerId
-                    const userToUpdate = await User.findOne({ stripeCustomerId: subscription.customer });
+                    const stripeCustomerId = subscription.customer;
+                    console.log(`Procurando usuário no banco de dados com stripeCustomerId: ${stripeCustomerId}`);
+
+                    // A busca no DB é o ponto mais crítico
+                    const userToUpdate = await User.findOne({ stripeCustomerId: stripeCustomerId });
 
                     if (userToUpdate) {
+                        console.log(`Usuário encontrado: ${userToUpdate._id}. Atualizando para o plano Free.`);
                         // Redefinimos o plano do usuário para 'Free'
                         await User.findByIdAndUpdate(userToUpdate._id, {
                             plan: 'Free',
-                            subscriptionStatus: 'canceled', // ou 'inactive'
+                            subscriptionStatus: 'canceled',
                         });
-                        console.log(`🔻 Assinatura cancelada para o usuário ${userToUpdate._id}. Plano redefinido para Free.`);
+                        console.log(`✅ Assinatura cancelada com sucesso para o usuário ${userToUpdate._id}.`);
+                    } else {
+                        // Se chegamos aqui, a busca falhou!
+                        console.log(`❌ Nenhum usuário encontrado com o stripeCustomerId: ${stripeCustomerId}`);
                     }
                 } catch (error) {
                     console.error('Erro ao processar cancelamento de assinatura:', error);
                     return res.status(500).send('Erro interno ao processar o cancelamento.');
                 }
+            } else {
+                console.log(`Status da assinatura ainda é '${subscription.status}'. Nenhuma ação necessária.`);
             }
             break;
+
 
         default:
             // Para qualquer outro evento que não estamos tratando, apenas registramos no log
