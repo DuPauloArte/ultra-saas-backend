@@ -1,0 +1,22 @@
+[
+  {
+    "id": "proj-demo-12345",
+    "name": "Projeto Padrão",
+    "userId": 1
+  },
+  {
+    "id": "proj-938e3b9a-1566-41b8-bb1e-170d67e56081",
+    "name": "LP-RadarM",
+    "userId": 2
+  },
+  {
+    "id": "proj-c3c159be-c1e9-4b45-81be-2834ecf09f1b",
+    "name": "LP-Radar",
+    "userId": 2
+  },
+  {
+    "id": "proj-c36f1b30-9e52-4d85-be9a-4f009281d57c",
+    "name": "Real State",
+    "userId": 3
+  }
+]

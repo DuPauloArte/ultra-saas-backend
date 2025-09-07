@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "name": "Paulo Duarte",
+    "email": "paulo@ultradigital.com",
+    "passwordHash": "$2a$10$wbyS.s2q882n4z/9p.P/UuBT0i0g5rY2NKGJUP46SNp4h/B51k4d2"
+  },
+  {
+    "id": 2,
+    "name": "Paulo",
+    "email": "contato@ultradigital.online",
+    "passwordHash": "$2b$10$BEPGWz4Gj5Sf28IZiJ4o5e2h8w/BHUj97eBlUl4sX7.GNcn8mLGDK"
+  },
+  {
+    "id": 3,
+    "name": "paulo",
+    "email": "paulo@ultradigital.online",
+    "passwordHash": "$2a$10$g1/Uzf0Y2fTesZqjOaj.8OEFPDXFZ1XfJf24mtsJ15xxRfxEpcY3G"
+  }
+]
