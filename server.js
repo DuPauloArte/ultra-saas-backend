@@ -42,46 +42,58 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         // --- CASO 1: Assinatura bem-sucedida ---
         case 'checkout.session.completed':
             const session = event.data.object;
+            console.log(`Webhook recebido: ${event.type}. Processando sessão ${session.id}`);
 
             try {
-                // Buscamos os itens da sessão para obter o ID do preço (priceId)
                 const lineItems = await stripeInstance.checkout.sessions.listLineItems(session.id);
+                if (!lineItems.data || lineItems.data.length === 0) {
+                    console.error('Erro: Nenhum line_item encontrado na sessão de checkout.');
+                    return res.status(400).send('Nenhum line_item encontrado.');
+                }
                 const priceId = lineItems.data[0].price.id;
+                console.log(`Price ID extraído: ${priceId}`);
 
-                // ATENÇÃO: Você precisa preencher este mapa com seus próprios IDs
+                // ATENÇÃO: Verifique se os IDs abaixo estão corretos
                 const priceIdToPlanMap = {
                     'price_1S4otg38EcxtIJ87v7Q5iwyP': 'Power',    // Substitua pelo seu Price ID do plano Power
                     'price_1S4ouD38EcxtIJ87eaRNGMOW': 'Turbo',    // Substitua pelo seu Price ID do plano Turbo
                     'price_1S4out38EcxtIJ87KG0DUNcf': 'Ultra',    // Substitua pelo seu Price ID do plano Ultra
-                    'price_1S4ovp38EcxtIJ8776wx3dum': 'Free',    // Substitua pelo seu Price ID do plano Ultra
+                    'price_1S4ovp38EcxtIJ8776wx3dum': 'Ultra',    // Substitua pelo seu Price ID do plano Free
                 };
 
                 const planName = priceIdToPlanMap[priceId];
+                console.log(`Plano correspondente encontrado: ${planName}`);
 
-                // Se o ID do preço não for encontrado no mapa, é um erro de configuração
                 if (!planName) {
-                    console.error(`Price ID ${priceId} não encontrado no mapa de planos.`);
-                    // Retornamos um erro 400 para que o Stripe saiba que algo está errado
+                    console.error(`ERRO CRÍTICO: Price ID ${priceId} não foi encontrado no mapa de planos.`);
                     return res.status(400).send('Erro de configuração: Price ID não mapeado.');
                 }
                 
-                // Pegamos as informações importantes da sessão
                 const userId = session.client_reference_id;
                 const stripeCustomerId = session.customer;
                 const stripeSubscriptionId = session.subscription;
 
-                // Atualizamos o usuário no nosso banco de dados com as informações do Stripe
-                await User.findByIdAndUpdate(userId, {
+                console.log(`Pronto para atualizar o usuário. Dados:
+                    - UserID: ${userId}
+                    - Stripe Customer ID: ${stripeCustomerId}
+                    - Stripe Subscription ID: ${stripeSubscriptionId}
+                    - Plano: ${planName}`);
+
+                const updatedUser = await User.findByIdAndUpdate(userId, {
                     stripeCustomerId,
                     stripeSubscriptionId,
                     plan: planName,
                     subscriptionStatus: 'active',
-                });
+                }, { new: true }); // { new: true } retorna o documento atualizado
 
-                console.log(`✅ Assinatura ativada para o usuário ${userId} com o plano ${planName}.`);
+                if (updatedUser) {
+                    console.log(`✅ Usuário ${userId} atualizado com sucesso no banco de dados.`);
+                } else {
+                    console.error(`❌ Falha ao atualizar o usuário ${userId}. Usuário não encontrado no DB.`);
+                }
 
             } catch (error) {
-                console.error('Erro ao processar checkout.session.completed:', error);
+                console.error('❌ Erro GERAL ao processar checkout.session.completed:', error);
                 return res.status(500).send('Erro interno ao processar a assinatura.');
             }
             break;
