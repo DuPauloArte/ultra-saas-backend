@@ -18,6 +18,113 @@ const JWT_SECRET = 'seu-segredo-super-secreto-e-longo';
 const stripeInstance = stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors());
+
+// A ROTA DE WEBHOOK DEVE VIR PRIMEIRO, com seu próprio parser de corpo 'raw'
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    let event;
+
+    try {
+        event = stripeInstance.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err) {
+        console.log(`❌ Erro no webhook: ${err.message}`);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // ===================================================================
+    //      INÍCIO DA LÓGICA COMPLETA DO WEBHOOK
+    // ===================================================================
+
+    // Lide com os diferentes tipos de eventos
+    switch (event.type) {
+        
+        // --- CASO 1: Assinatura bem-sucedida ---
+        case 'checkout.session.completed':
+            const session = event.data.object;
+
+            try {
+                // Buscamos os itens da sessão para obter o ID do preço (priceId)
+                const lineItems = await stripeInstance.checkout.sessions.listLineItems(session.id);
+                const priceId = lineItems.data[0].price.id;
+
+                // ATENÇÃO: Você precisa preencher este mapa com seus próprios IDs
+                const priceIdToPlanMap = {
+                    'price_1S4otg38EcxtIJ87v7Q5iwyP': 'Power',    // Substitua pelo seu Price ID do plano Power
+                    'price_1S4ouD38EcxtIJ87eaRNGMOW': 'Turbo',    // Substitua pelo seu Price ID do plano Turbo
+                    'price_1S4out38EcxtIJ87KG0DUNcf': 'Ultra',    // Substitua pelo seu Price ID do plano Ultra
+                    'price_1S4ovp38EcxtIJ8776wx3dum': 'Free',    // Substitua pelo seu Price ID do plano Ultra
+                };
+
+                const planName = priceIdToPlanMap[priceId];
+
+                // Se o ID do preço não for encontrado no mapa, é um erro de configuração
+                if (!planName) {
+                    console.error(`Price ID ${priceId} não encontrado no mapa de planos.`);
+                    // Retornamos um erro 400 para que o Stripe saiba que algo está errado
+                    return res.status(400).send('Erro de configuração: Price ID não mapeado.');
+                }
+                
+                // Pegamos as informações importantes da sessão
+                const userId = session.client_reference_id;
+                const stripeCustomerId = session.customer;
+                const stripeSubscriptionId = session.subscription;
+
+                // Atualizamos o usuário no nosso banco de dados com as informações do Stripe
+                await User.findByIdAndUpdate(userId, {
+                    stripeCustomerId,
+                    stripeSubscriptionId,
+                    plan: planName,
+                    subscriptionStatus: 'active',
+                });
+
+                console.log(`✅ Assinatura ativada para o usuário ${userId} com o plano ${planName}.`);
+
+            } catch (error) {
+                console.error('Erro ao processar checkout.session.completed:', error);
+                return res.status(500).send('Erro interno ao processar a assinatura.');
+            }
+            break;
+
+        // --- CASO 2: Assinatura cancelada ou com falha de pagamento ---
+        case 'customer.subscription.deleted':
+        case 'customer.subscription.updated':
+            const subscription = event.data.object;
+
+            // Se o status da assinatura não for mais 'active' ou 'trialing'
+            if (subscription.status !== 'active' && subscription.status !== 'trialing') {
+                try {
+                    // Encontramos o usuário no nosso DB pelo stripeCustomerId
+                    const userToUpdate = await User.findOne({ stripeCustomerId: subscription.customer });
+
+                    if (userToUpdate) {
+                        // Redefinimos o plano do usuário para 'Free'
+                        await User.findByIdAndUpdate(userToUpdate._id, {
+                            plan: 'Free',
+                            subscriptionStatus: 'canceled', // ou 'inactive'
+                        });
+                        console.log(`🔻 Assinatura cancelada para o usuário ${userToUpdate._id}. Plano redefinido para Free.`);
+                    }
+                } catch (error) {
+                    console.error('Erro ao processar cancelamento de assinatura:', error);
+                    return res.status(500).send('Erro interno ao processar o cancelamento.');
+                }
+            }
+            break;
+
+        default:
+            // Para qualquer outro evento que não estamos tratando, apenas registramos no log
+            console.log(`Evento não tratado: ${event.type}`);
+    }
+
+    // ===================================================================
+    //      FIM DA LÓGICA COMPLETA DO WEBHOOK
+    // ===================================================================
+
+    // Responda ao Stripe com um status 200 para confirmar o recebimento do evento
+    res.json({ received: true });
+});
+
 app.use(express.json());
 
 mongoose.connect(process.env.DATABASE_URL)
@@ -472,66 +579,6 @@ app.post('/api/stripe/create-checkout-session', authenticateToken, async (req, r
         console.error('Erro ao criar sessão de checkout:', error);
         res.status(500).json({ error: 'Não foi possível iniciar o checkout.' });
     }
-});
-
-// ROTA DE WEBHOOK PARA RECEBER EVENTOS DO STRIPE
-// Nota: O Stripe precisa do corpo bruto da requisição para verificar a assinatura
-app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-    const sig = req.headers['stripe-signature'];
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET; // Crie esta variável no Render
-
-    let event;
-
-    try {
-        event = stripeInstance.webhooks.constructEvent(req.body, sig, webhookSecret);
-    } catch (err) {
-        console.log(`❌ Erro no webhook: ${err.message}`);
-        return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    // Lide com os eventos
-    switch (event.type) {
-        case 'checkout.session.completed':
-            const session = event.data.object;
-            const userId = session.client_reference_id;
-            const stripeCustomerId = session.customer;
-            const stripeSubscriptionId = session.subscription;
-            
-            // Lógica para encontrar o plano com base no priceId
-            // Você precisará mapear seus Price IDs para os nomes dos planos
-            const planName = 'Power'; // Exemplo: Implemente a lógica para mapear priceId -> planName
-            
-            // Atualize seu usuário no banco de dados
-            await User.findByIdAndUpdate(userId, {
-                stripeCustomerId,
-                stripeSubscriptionId,
-                plan: planName,
-                subscriptionStatus: 'active',
-            });
-            break;
-
-        case 'customer.subscription.deleted':
-        case 'customer.subscription.updated':
-            // Lida com cancelamentos ou problemas de pagamento
-            const subscription = event.data.object;
-            const userToUpdate = await User.findOne({ stripeCustomerId: subscription.customer });
-
-            if (userToUpdate) {
-                // Se a assinatura não está mais ativa, redefina para o plano Free
-                if (subscription.status !== 'active') {
-                    await User.findByIdAndUpdate(userToUpdate._id, {
-                        plan: 'Free',
-                        subscriptionStatus: 'canceled',
-                    });
-                }
-            }
-            break;
-
-        default:
-            console.log(`Evento não tratado: ${event.type}`);
-    }
-
-    res.json({ received: true });
 });
 
 
