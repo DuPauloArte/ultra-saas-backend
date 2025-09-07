@@ -171,6 +171,15 @@ const userSchema = new mongoose.Schema({
         enum: ['active', 'canceled', 'inactive'],
         default: 'active'
     },
+
+    stripeCustomerId: {
+        type: String,
+        default: null
+    },
+    stripeSubscriptionId: {
+        type: String,
+        default: null
+    },
 }, { timestamps: true });
 const User = mongoose.model('User', userSchema);
 
