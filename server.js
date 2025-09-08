@@ -1,4 +1,4 @@
-// backend/server.js
+// backend/server.js --- VERSÃO COMPLETA E CORRIGIDA ---
 
 // --- 1. IMPORTAÇÕES ---
 import express from 'express';
@@ -14,12 +14,12 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = 'seu-segredo-super-secreto-e-longo'; 
+const JWT_SECRET = process.env.JWT_SECRET; 
 const stripeInstance = stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors());
 
-// A ROTA DE WEBHOOK DEVE VIR PRIMEIRO, com seu próprio parser de corpo 'raw'
+// A ROTA DE WEBHOOK DEVE VIR PRIMEIRO
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -32,97 +32,118 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // ===================================================================
-    //      INÍCIO DA LÓGICA COMPLETA DO WEBHOOK
-    // ===================================================================
-
     // Lide com os diferentes tipos de eventos
     switch (event.type) {
-        
-        // --- CASO 1: Assinatura bem-sucedida (sem alterações) ---
-        case 'checkout.session.completed':
-            // ... seu código para este case permanece o mesmo
-            break;
+    
+    // CASO 1: Assinatura bem-sucedida (primeira vez)
+    case 'checkout.session.completed':
+        const session = event.data.object;
+        console.log(`Webhook recebido: ${event.type}. Processando sessão ${session.id}`);
+        try {
+            const lineItems = await stripeInstance.checkout.sessions.listLineItems(session.id);
+            const priceId = lineItems.data[0].price.id;
+            const priceIdToPlanMap = {
+                'price_1S4otg38EcxtIJ87v7Q5iwyP': 'Power',    // Substitua pelos seus IDs
+                'price_1S4ouD38EcxtIJ87eaRNGMOW': 'Turbo',    // Substitua pelos seus IDs
+                'price_1S4out38EcxtIJ87KG0DUNcf': 'Ultra',    // Substitua pelos seus IDs
+            };
+            const planName = priceIdToPlanMap[priceId];
 
-        // --- CASO 2 (NOVO): A assinatura foi ATUALIZADA (upgrade/downgrade) ---
-        case 'customer.subscription.updated':
-            const updatedSubscription = event.data.object;
-            console.log(`Webhook recebido: ${event.type}. Processando assinatura ${updatedSubscription.id}`);
-
-            try {
-                const stripeCustomerId = updatedSubscription.customer;
-                const userToUpdate = await User.findOne({ stripeCustomerId: stripeCustomerId });
-
-                if (userToUpdate) {
-                    // Pega o novo Price ID
-                    const newPriceId = updatedSubscription.items.data[0].price.id;
-                    
-                    // Usa o mesmo mapa de planos que já temos
-                    const priceIdToPlanMap = {
-                        'price_1S4otg38EcxtIJ87v7Q5iwyP': 'Power',
-                        'price_1S4ouD38EcxtIJ87eaRNGMOW': 'Turbo',
-                        'price_1S4out38EcxtIJ87KG0DUNcf': 'Ultra',
-                    };
-                    const newPlanName = priceIdToPlanMap[newPriceId];
-                    
-                    if (!newPlanName) {
-                        console.error(`Price ID ${newPriceId} da atualização não foi encontrado no mapa.`);
-                        return res.status(400).send('Erro de configuração: Price ID não mapeado.');
-                    }
-                    
-                    // Atualiza o usuário com o novo plano e o status atual da assinatura
-                    await User.findByIdAndUpdate(userToUpdate._id, {
-                        plan: newPlanName,
-                        subscriptionStatus: updatedSubscription.status, // ex: 'active', 'past_due'
-                    });
-
-                    console.log(`✅ Assinatura ATUALIZADA para o usuário ${userToUpdate._id}. Novo plano: ${newPlanName}.`);
-                } else {
-                    console.log(`❌ Usuário com stripeCustomerId ${stripeCustomerId} não encontrado para a atualização.`);
-                }
-            } catch (error) {
-                console.error('Erro ao processar customer.subscription.updated:', error);
-                return res.status(500).send('Erro interno ao processar a atualização da assinatura.');
+            if (!planName) {
+                console.error(`Price ID ${priceId} não encontrado no mapa de planos.`);
+                return res.status(400).send('Erro de configuração: Price ID não mapeado.');
             }
-            break;
+            
+            const userId = session.client_reference_id;
+            const stripeCustomerId = session.customer;
+            const stripeSubscriptionId = session.subscription;
 
-        // --- CASO 3 (NOVO): A assinatura foi DELETADA (cancelamento) ---
-        case 'customer.subscription.deleted':
-            const deletedSubscription = event.data.object;
-            console.log(`Webhook recebido: ${event.type}. Processando assinatura ${deletedSubscription.id}`);
+            await User.findByIdAndUpdate(userId, {
+                stripeCustomerId,
+                stripeSubscriptionId,
+                plan: planName,
+                subscriptionStatus: 'active',
+            });
+            console.log(`✅ Assinatura INICIAL ativada para o usuário ${userId} com o plano ${planName}.`);
+        } catch (error) {
+            console.error('Erro ao processar checkout.session.completed:', error);
+            return res.status(500).send('Erro interno ao processar a assinatura.');
+        }
+        break;
 
-            try {
-                const stripeCustomerId = deletedSubscription.customer;
-                const userToCancel = await User.findOne({ stripeCustomerId: stripeCustomerId });
+    // CASO 2: A assinatura foi ATUALIZADA (upgrade/downgrade/falha de pagamento)
+    case 'customer.subscription.updated':
+        const updatedSubscription = event.data.object;
+        console.log(`Webhook recebido: ${event.type}. Processando assinatura ${updatedSubscription.id}`);
 
-                if (userToCancel) {
-                    // Redefine o plano do usuário para 'Free'
-                    await User.findByIdAndUpdate(userToCancel._id, {
-                        plan: 'Free',
-                        subscriptionStatus: 'canceled',
-                    });
-                    console.log(`🔻 Assinatura CANCELADA para o usuário ${userToCancel._id}. Plano redefinido para Free.`);
-                } else {
-                    console.log(`❌ Usuário com stripeCustomerId ${stripeCustomerId} não encontrado para o cancelamento.`);
+        try {
+            const stripeCustomerId = updatedSubscription.customer;
+            const userToUpdate = await User.findOne({ stripeCustomerId: stripeCustomerId });
+
+            if (userToUpdate) {
+                const newPriceId = updatedSubscription.items.data[0].price.id;
+                
+                const priceIdToPlanMap = {
+                    'price_1S4otg38EcxtIJ87v7Q5iwyP': 'Power',
+                    'price_1S4ouD38EcxtIJ87eaRNGMOW': 'Turbo',
+                    'price_1S4out38EcxtIJ87KG0DUNcf': 'Ultra',
+                };
+                const newPlanName = priceIdToPlanMap[newPriceId];
+                
+                if (!newPlanName) {
+                    console.error(`Price ID ${newPriceId} da atualização não foi encontrado no mapa.`);
+                    return res.status(400).send('Erro de configuração: Price ID não mapeado.');
                 }
-            } catch (error) {
-                console.error('Erro ao processar customer.subscription.deleted:', error);
-                return res.status(500).send('Erro interno ao processar o cancelamento.');
-            }
-            break;
+                
+                // Atualiza o usuário com o novo plano e o status atual da assinatura
+                await User.findByIdAndUpdate(userToUpdate._id, {
+                    plan: newPlanName,
+                    subscriptionStatus: updatedSubscription.status, // ex: 'active', 'past_due'
+                });
 
-        default:
-            console.log(`Evento não tratado: ${event.type}`);
-    }
+                console.log(`✅ Assinatura ATUALIZADA para o usuário ${userToUpdate._id}. Novo plano: ${newPlanName}.`);
+            } else {
+                console.log(`❌ Usuário com stripeCustomerId ${stripeCustomerId} não encontrado para a atualização.`);
+            }
+        } catch (error) {
+            console.error('Erro ao processar customer.subscription.updated:', error);
+            return res.status(500).send('Erro interno ao processar a atualização da assinatura.');
+        }
+        break;
+
+    // CASO 3: A assinatura foi DELETADA (cancelamento explícito)
+    case 'customer.subscription.deleted':
+        const deletedSubscription = event.data.object;
+        console.log(`Webhook recebido: ${event.type}. Processando assinatura ${deletedSubscription.id}`);
+
+        try {
+            const stripeCustomerId = deletedSubscription.customer;
+            const userToCancel = await User.findOne({ stripeCustomerId: stripeCustomerId });
+
+            if (userToCancel) {
+                // Redefine o plano do usuário para 'Free'
+                await User.findByIdAndUpdate(userToCancel._id, {
+                    plan: 'Free',
+                    subscriptionStatus: 'canceled',
+                });
+                console.log(`🔻 Assinatura CANCELADA para o usuário ${userToCancel._id}. Plano redefinido para Free.`);
+            } else {
+                console.log(`❌ Usuário com stripeCustomerId ${stripeCustomerId} não encontrado para o cancelamento.`);
+            }
+        } catch (error) {
+            console.error('Erro ao processar customer.subscription.deleted:', error);
+            return res.status(500).send('Erro interno ao processar o cancelamento.');
+        }
+        break;
+
+    default:
+        console.log(`Evento não tratado: ${event.type}`);
+}
  
-    // ===================================================================
-    //      FIM DA LÓGICA COMPLETA DO WEBHOOK
-    // ===================================================================
-
-    // Responda ao Stripe com um status 200 para confirmar o recebimento do evento
     res.json({ received: true });
 });
 
+// O PARSER JSON VEM DEPOIS DO WEBHOOK
 app.use(express.json());
 
 mongoose.connect(process.env.DATABASE_URL)
