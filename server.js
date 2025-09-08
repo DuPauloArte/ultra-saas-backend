@@ -140,6 +140,11 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
             console.log(`Evento não tratado: ${event.type}`);
     }
 
+    
+
+
+
+
     // ===================================================================
     //      FIM DA LÓGICA COMPLETA DO WEBHOOK
     // ===================================================================
@@ -610,6 +615,25 @@ app.post('/api/stripe/create-checkout-session', authenticateToken, async (req, r
     } catch (error) {
         console.error('Erro ao criar sessão de checkout:', error);
         res.status(500).json({ error: 'Não foi possível iniciar o checkout.' });
+    }
+});
+
+app.post('/api/stripe/create-portal-session', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || !user.stripeCustomerId) {
+            return res.status(400).json({ message: 'Usuário não encontrado ou sem assinatura.' });
+        }
+
+        const portalSession = await stripeInstance.billingPortal.sessions.create({
+            customer: user.stripeCustomerId,
+            return_url: `${process.env.FRONTEND_URL}/plans`,
+        });
+
+        res.json({ url: portalSession.url });
+    } catch (error) {
+        console.error('Erro ao criar sessão do portal do cliente:', error);
+        res.status(500).json({ error: 'Não foi possível acessar o portal de gerenciamento.' });
     }
 });
 
