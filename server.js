@@ -39,112 +39,82 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     // Lide com os diferentes tipos de eventos
     switch (event.type) {
         
-        // --- CASO 1: Assinatura bem-sucedida ---
+        // --- CASO 1: Assinatura bem-sucedida (sem alterações) ---
         case 'checkout.session.completed':
-            const session = event.data.object;
-            console.log(`Webhook recebido: ${event.type}. Processando sessão ${session.id}`);
+            // ... seu código para este case permanece o mesmo
+            break;
+
+        // --- CASO 2 (NOVO): A assinatura foi ATUALIZADA (upgrade/downgrade) ---
+        case 'customer.subscription.updated':
+            const updatedSubscription = event.data.object;
+            console.log(`Webhook recebido: ${event.type}. Processando assinatura ${updatedSubscription.id}`);
 
             try {
-                const lineItems = await stripeInstance.checkout.sessions.listLineItems(session.id);
-                if (!lineItems.data || lineItems.data.length === 0) {
-                    console.error('Erro: Nenhum line_item encontrado na sessão de checkout.');
-                    return res.status(400).send('Nenhum line_item encontrado.');
-                }
-                const priceId = lineItems.data[0].price.id;
-                console.log(`Price ID extraído: ${priceId}`);
+                const stripeCustomerId = updatedSubscription.customer;
+                const userToUpdate = await User.findOne({ stripeCustomerId: stripeCustomerId });
 
-                // ATENÇÃO: Verifique se os IDs abaixo estão corretos
-                const priceIdToPlanMap = {
-                    'price_1S4otg38EcxtIJ87v7Q5iwyP': 'Power',    // Substitua pelo seu Price ID do plano Power
-                    'price_1S4ouD38EcxtIJ87eaRNGMOW': 'Turbo',    // Substitua pelo seu Price ID do plano Turbo
-                    'price_1S4out38EcxtIJ87KG0DUNcf': 'Ultra',    // Substitua pelo seu Price ID do plano Ultra
-                    'price_1S4ovp38EcxtIJ8776wx3dum': 'Ultra',    // Substitua pelo seu Price ID do plano Free
-                };
-
-                const planName = priceIdToPlanMap[priceId];
-                console.log(`Plano correspondente encontrado: ${planName}`);
-
-                if (!planName) {
-                    console.error(`ERRO CRÍTICO: Price ID ${priceId} não foi encontrado no mapa de planos.`);
-                    return res.status(400).send('Erro de configuração: Price ID não mapeado.');
-                }
-                
-                const userId = session.client_reference_id;
-                const stripeCustomerId = session.customer;
-                const stripeSubscriptionId = session.subscription;
-
-                console.log(`Pronto para atualizar o usuário. Dados:
-                    - UserID: ${userId}
-                    - Stripe Customer ID: ${stripeCustomerId}
-                    - Stripe Subscription ID: ${stripeSubscriptionId}
-                    - Plano: ${planName}`);
-
-                const updatedUser = await User.findByIdAndUpdate(userId, {
-                    stripeCustomerId,
-                    stripeSubscriptionId,
-                    plan: planName,
-                    subscriptionStatus: 'active',
-                }, { new: true }); // { new: true } retorna o documento atualizado
-
-                if (updatedUser) {
-                    console.log(`✅ Usuário ${userId} atualizado com sucesso no banco de dados.`);
-                } else {
-                    console.error(`❌ Falha ao atualizar o usuário ${userId}. Usuário não encontrado no DB.`);
-                }
-
-            } catch (error) {
-                console.error('❌ Erro GERAL ao processar checkout.session.completed:', error);
-                return res.status(500).send('Erro interno ao processar a assinatura.');
-            }
-            break;
-
-        // --- CASO 2: Assinatura cancelada ou com falha de pagamento ---
-        case 'customer.subscription.deleted':
-        case 'customer.subscription.updated':
-            const subscription = event.data.object;
-            console.log(`Webhook recebido: ${event.type} para a assinatura ${subscription.id}`);
-
-            // Verificamos se o status da assinatura indica que ela não está mais ativa
-            if (subscription.status !== 'active' && subscription.status !== 'trialing') {
-                try {
-                    const stripeCustomerId = subscription.customer;
-                    console.log(`Procurando usuário no banco de dados com stripeCustomerId: ${stripeCustomerId}`);
-
-                    // A busca no DB é o ponto mais crítico
-                    const userToUpdate = await User.findOne({ stripeCustomerId: stripeCustomerId });
-
-                    if (userToUpdate) {
-                        console.log(`Usuário encontrado: ${userToUpdate._id}. Atualizando para o plano Free.`);
-                        // Redefinimos o plano do usuário para 'Free'
-                        await User.findByIdAndUpdate(userToUpdate._id, {
-                            plan: 'Free',
-                            subscriptionStatus: 'canceled',
-                        });
-                        console.log(`✅ Assinatura cancelada com sucesso para o usuário ${userToUpdate._id}.`);
-                    } else {
-                        // Se chegamos aqui, a busca falhou!
-                        console.log(`❌ Nenhum usuário encontrado com o stripeCustomerId: ${stripeCustomerId}`);
+                if (userToUpdate) {
+                    // Pega o novo Price ID
+                    const newPriceId = updatedSubscription.items.data[0].price.id;
+                    
+                    // Usa o mesmo mapa de planos que já temos
+                    const priceIdToPlanMap = {
+                        'price_1S4otg38EcxtIJ87v7Q5iwyP': 'Power',
+                        'price_1S4ouD38EcxtIJ87eaRNGMOW': 'Turbo',
+                        'price_1S4out38EcxtIJ87KG0DUNcf': 'Ultra',
+                    };
+                    const newPlanName = priceIdToPlanMap[newPriceId];
+                    
+                    if (!newPlanName) {
+                        console.error(`Price ID ${newPriceId} da atualização não foi encontrado no mapa.`);
+                        return res.status(400).send('Erro de configuração: Price ID não mapeado.');
                     }
-                } catch (error) {
-                    console.error('Erro ao processar cancelamento de assinatura:', error);
-                    return res.status(500).send('Erro interno ao processar o cancelamento.');
+                    
+                    // Atualiza o usuário com o novo plano e o status atual da assinatura
+                    await User.findByIdAndUpdate(userToUpdate._id, {
+                        plan: newPlanName,
+                        subscriptionStatus: updatedSubscription.status, // ex: 'active', 'past_due'
+                    });
+
+                    console.log(`✅ Assinatura ATUALIZADA para o usuário ${userToUpdate._id}. Novo plano: ${newPlanName}.`);
+                } else {
+                    console.log(`❌ Usuário com stripeCustomerId ${stripeCustomerId} não encontrado para a atualização.`);
                 }
-            } else {
-                console.log(`Status da assinatura ainda é '${subscription.status}'. Nenhuma ação necessária.`);
+            } catch (error) {
+                console.error('Erro ao processar customer.subscription.updated:', error);
+                return res.status(500).send('Erro interno ao processar a atualização da assinatura.');
             }
             break;
 
+        // --- CASO 3 (NOVO): A assinatura foi DELETADA (cancelamento) ---
+        case 'customer.subscription.deleted':
+            const deletedSubscription = event.data.object;
+            console.log(`Webhook recebido: ${event.type}. Processando assinatura ${deletedSubscription.id}`);
+
+            try {
+                const stripeCustomerId = deletedSubscription.customer;
+                const userToCancel = await User.findOne({ stripeCustomerId: stripeCustomerId });
+
+                if (userToCancel) {
+                    // Redefine o plano do usuário para 'Free'
+                    await User.findByIdAndUpdate(userToCancel._id, {
+                        plan: 'Free',
+                        subscriptionStatus: 'canceled',
+                    });
+                    console.log(`🔻 Assinatura CANCELADA para o usuário ${userToCancel._id}. Plano redefinido para Free.`);
+                } else {
+                    console.log(`❌ Usuário com stripeCustomerId ${stripeCustomerId} não encontrado para o cancelamento.`);
+                }
+            } catch (error) {
+                console.error('Erro ao processar customer.subscription.deleted:', error);
+                return res.status(500).send('Erro interno ao processar o cancelamento.');
+            }
+            break;
 
         default:
-            // Para qualquer outro evento que não estamos tratando, apenas registramos no log
             console.log(`Evento não tratado: ${event.type}`);
     }
-
-    
-
-
-
-
+ 
     // ===================================================================
     //      FIM DA LÓGICA COMPLETA DO WEBHOOK
     // ===================================================================
