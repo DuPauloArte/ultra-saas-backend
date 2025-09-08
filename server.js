@@ -77,8 +77,15 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         console.log(`Webhook recebido: ${event.type}. Processando assinatura ${updatedSubscription.id}`);
 
         try {
-            const stripeCustomerId = updatedSubscription.customer;
-            const userToUpdate = await User.findOne({ stripeCustomerId: stripeCustomerId });
+        const stripeCustomerId = updatedSubscription.customer;
+
+        // Log para vermos o que estamos procurando
+        console.log(`[DEBUG] Procurando usuário com stripeCustomerId: ${stripeCustomerId}`);
+
+        const userToUpdate = await User.findOne({ stripeCustomerId: stripeCustomerId });
+
+        // Log para vermos o RESULTADO da busca
+        console.log('[DEBUG] Resultado da busca no DB:', userToUpdate);
 
             if (userToUpdate) {
                 const newPriceId = updatedSubscription.items.data[0].price.id;
