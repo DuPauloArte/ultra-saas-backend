@@ -160,7 +160,7 @@ const userSchema = new mongoose.Schema({
     plan: {
         type: String,
         enum: ['Power', 'Turbo', 'Ultra', 'Enterprise', 'Staff', 'Free'],
-        default: 'Free' // Todo novo usuário começa no plano Power
+        default: 'Free' // Todo novo usuário começa no plano Free
     },
     subscriptionStatus: {
         type: String,
@@ -320,19 +320,6 @@ app.post('/api/users/register', async (req, res) => {
     } catch (error) {
         console.error('Erro no registro:', error);
         res.status(500).json({ message: 'Erro ao registrar usuário' });
-    }
-});
-
-app.get('/api/users/me', authenticateToken, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.userId).select('-passwordHash');
-        if (!user) {
-            return res.status(404).json({ message: 'Usuário não encontrado.' });
-        }
-        res.json(user);
-    } catch (error) {
-        console.error('Erro ao buscar usuário:', error);
-        res.status(500).json({ message: 'Erro interno no servidor' });
     }
 });
 
