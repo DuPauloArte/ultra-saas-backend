@@ -433,7 +433,6 @@ app.put('/api/projects/:projectId', authenticateToken, async (req, res) => {
 // A rota de captura agora usa o novo middleware 'checkLeadLimit'
 app.post('/api/capture/:projectId', checkLeadLimit, async (req, res) => {
     try {
-        console.log('[DEBUG] Payload recebido em /api/capture:', req.body);
         const leadData = req.body;
         if (!leadData.email) return res.status(400).json({ message: 'O campo email é obrigatório.' });
         
