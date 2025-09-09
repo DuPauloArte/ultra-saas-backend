@@ -143,6 +143,40 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         }
         break;
 
+
+        // CASO 4: UMA FATURA DE RENOVAÇÃO FALHOU
+    case 'invoice.payment_failed':
+        const invoice = event.data.object;
+        console.log(`Webhook recebido: ${event.type}. Fatura: ${invoice.id}`);
+
+        try {
+            // O ID do cliente está no campo 'customer' da fatura
+            const stripeCustomerId = invoice.customer;
+            
+            // Se não houver ID de cliente, não há o que fazer
+            if (!stripeCustomerId) {
+                console.log('Evento invoice.payment_failed sem stripeCustomerId. Ignorando.');
+                break;
+            }
+
+            const userToUpdate = await User.findOne({ stripeCustomerId: stripeCustomerId });
+
+            if (userToUpdate) {
+                // Atualizamos o status da assinatura do usuário para 'inactive'
+                // O status real da assinatura no Stripe provavelmente será 'past_due'
+                await User.findByIdAndUpdate(userToUpdate._id, {
+                    subscriptionStatus: 'inactive',
+                });
+                console.log(`💳 Pagamento falhou para o usuário ${userToUpdate._id}. Status alterado para 'inactive'.`);
+            } else {
+                console.log(`❌ Usuário com stripeCustomerId ${stripeCustomerId} não encontrado para a falha de pagamento.`);
+            }
+        } catch (error) {
+            console.error('Erro ao processar invoice.payment_failed:', error);
+            return res.status(500).send('Erro interno ao processar falha de pagamento.');
+        }
+        break;
+
     default:
         console.log(`Evento não tratado: ${event.type}`);
 }
@@ -202,10 +236,8 @@ const leadSchema = new mongoose.Schema({
     email: { type: String, required: true },
     telefone: { type: String, default: 'N/A' },
     cidade: { type: String, default: 'Não informado' },
-    comentarios: [{
-        texto: String,
-        data: { type: Date, default: Date.now }
-    }]
+    // ALTERE A LINHA ABAIXO
+    comentarios: { type: String, default: '' } // Mudamos de um array para uma string simples
 });
 const Lead = mongoose.model('Lead', leadSchema);
 
@@ -401,6 +433,7 @@ app.put('/api/projects/:projectId', authenticateToken, async (req, res) => {
 // A rota de captura agora usa o novo middleware 'checkLeadLimit'
 app.post('/api/capture/:projectId', checkLeadLimit, async (req, res) => {
     try {
+        console.log('[DEBUG] Payload recebido em /api/capture:', req.body);
         const leadData = req.body;
         if (!leadData.email) return res.status(400).json({ message: 'O campo email é obrigatório.' });
         
@@ -409,7 +442,8 @@ app.post('/api/capture/:projectId', checkLeadLimit, async (req, res) => {
             nome: leadData.nome,
             email: leadData.email,
             telefone: leadData.telefone,
-            cidade: leadData.cidade
+            cidade: leadData.cidade,
+            comentarios: leadData.comentarios // <-- ADICIONE ESTA LINHA
         });
         await newLead.save();
         
@@ -452,24 +486,30 @@ app.get('/api/leads', authenticateToken, async (req, res) => {
 app.put('/api/leads/:id', authenticateToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const updatedData = req.body;
+        // O body agora contém: { nome, cidade, status, comentarios }
+        const updatedData = req.body; 
         
         const leadToUpdate = await Lead.findById(id);
         if (!leadToUpdate) {
             return res.status(404).json({ message: 'Lead não encontrado.' });
         }
         
+        // Verifica se o lead pertence ao usuário logado
         const project = await Project.findById(leadToUpdate.projectId);
         if (project.userId.toString() !== req.user.userId) {
             return res.status(403).json({ message: 'Acesso negado.' });
         }
         
+        // Atualiza os campos editáveis
         leadToUpdate.nome = updatedData.nome || leadToUpdate.nome;
         leadToUpdate.cidade = updatedData.cidade || leadToUpdate.cidade;
         leadToUpdate.status = updatedData.status || leadToUpdate.status;
         
-        if (updatedData.novoComentario && updatedData.novoComentario.trim() !== '') {
-            leadToUpdate.comentarios.push({ texto: updatedData.novoComentario });
+        // LÓGICA CORRIGIDA:
+        // Se o front-end enviou o campo 'comentarios' (que já contém o histórico + a nova anotação),
+        // nós simplesmente substituímos o valor antigo pelo novo.
+        if (updatedData.comentarios !== undefined) {
+            leadToUpdate.comentarios = updatedData.comentarios;
         }
         
         const savedLead = await leadToUpdate.save();
